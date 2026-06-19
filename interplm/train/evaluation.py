@@ -6,6 +6,7 @@ import torch as t
 
 from interplm.sae.dictionary import Dictionary
 from interplm.train.data_loader import DataloaderConfig, ShardedActivationsDataset
+from interplm.train.pair_data_loader import PairDataloaderConfig, PairActivationsDataLoader
 
 
 @dataclass
@@ -22,6 +23,7 @@ class EvaluationConfig:
     zscore_means_file: Path | None = None
     zscore_vars_file: Path | None = None
     target_dtype: torch.dtype = torch.float32
+    activation_type: str = "token"
 
     def build(self) -> "EvaluationManager":
         return EvaluationManager(self)
@@ -35,17 +37,23 @@ class EvaluationManager:
         self.eval_embd_dir = eval_config.eval_embd_dir
         self.eval_batch_size = eval_config.eval_batch_size
 
-        self.eval_activations = (
-            DataloaderConfig(
-                plm_embd_dir=self.eval_embd_dir,
-                batch_size=self.eval_batch_size,
-                zscore_means_file=eval_config.zscore_means_file,
-                zscore_vars_file=eval_config.zscore_vars_file,
-                target_dtype=eval_config.target_dtype,
-            ).build()
-            if self.eval_embd_dir is not None
-            else None
-        )
+        if self.eval_embd_dir is not None:
+            if self.config.activation_type == "pair":
+                self.eval_activations = PairDataloaderConfig(
+                    plm_embd_dir=self.eval_embd_dir,
+                    batch_size=self.eval_batch_size or 4,
+                    target_dtype=eval_config.target_dtype,
+                ).build()
+            else:
+                self.eval_activations = DataloaderConfig(
+                    plm_embd_dir=self.eval_embd_dir,
+                    batch_size=self.eval_batch_size,
+                    zscore_means_file=eval_config.zscore_means_file,
+                    zscore_vars_file=eval_config.zscore_vars_file,
+                    target_dtype=eval_config.target_dtype,
+                ).build()
+        else:
+            self.eval_activations = None
 
     def _calculate_fidelity(self, features: t.Tensor):
         """By default, we don't calculate fidelity (subclass should override)"""

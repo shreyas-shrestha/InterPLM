@@ -510,6 +510,7 @@ class AttributePreservingSubset(Subset):
         super().__init__(dataset, indices)
         # Preserve key attributes from the original dataset for downstream access
         self.d_model = dataset.d_model
-        self.zscore_unnormalizer = getattr(dataset, 'zscore_unnormalizer', None)
+        self.total_tokens = len(indices)
+        self.zscore_unnormalizer = getattr(dataset, "zscore_unnormalizer", None)
         if self.zscore_unnormalizer is None:
             self.zscore_unnormalizer = getattr(dataset, None)

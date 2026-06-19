@@ -7,6 +7,7 @@ import yaml
 from interplm.constants import DATA_DIR
 from interplm.train.checkpoint_manager import CheckpointConfig
 from interplm.train.data_loader import DataloaderConfig
+from interplm.train.pair_data_loader import PairDataloaderConfig
 from interplm.train.evaluation import EvaluationConfig
 from interplm.train.trainers.base_trainer import SAETrainerConfig
 from interplm.train.trainers.relu import ReLUTrainerConfig  
@@ -39,7 +40,7 @@ def _get_trainer_config_class(trainer_data: dict) -> type:
 
 @dataclass
 class TrainingRunConfig:
-    dataloader_cfg: DataloaderConfig
+    dataloader_cfg: DataloaderConfig | PairDataloaderConfig
     trainer_cfg: SAETrainerConfig
     eval_cfg: EvaluationConfig
     wandb_cfg: WandbConfig
@@ -174,8 +175,17 @@ class TrainingRunConfig:
 
         # Process all config fields
         if 'dataloader_cfg' in data:
-            data['dataloader_cfg'] = _convert_str_to_special_types(data['dataloader_cfg'], DataloaderConfig)
-            data['dataloader_cfg'] = DataloaderConfig(**data['dataloader_cfg'])
+            dataloader_data = data['dataloader_cfg']
+            if isinstance(dataloader_data, dict):
+                dataloader_data = _convert_str_to_special_types(dataloader_data)
+                if dataloader_data.get("activation_type") == "pair":
+                    data['dataloader_cfg'] = PairDataloaderConfig(**dataloader_data)
+                else:
+                    data['dataloader_cfg'] = DataloaderConfig(**dataloader_data)
+            elif isinstance(dataloader_data, (DataloaderConfig, PairDataloaderConfig)):
+                data['dataloader_cfg'] = dataloader_data
+            else:
+                data['dataloader_cfg'] = DataloaderConfig(**dataloader_data)
         
         if 'trainer_cfg' in data:
             trainer_config_class = _get_trainer_config_class(data['trainer_cfg'])

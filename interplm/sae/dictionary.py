@@ -280,13 +280,18 @@ class SpatialPairSAE(Dictionary):
         self,
         d_hidden: int,
         expansion_factor: int = 4,
+        d_dictionary: int | None = None,
         normalize_to_sqrt_d: bool = False,
     ) -> None:
         """
         Args:
             d_hidden: Number of channels in the pair representation.
             expansion_factor: Multiplier used to compute the dictionary size
-                as ``d_hidden * expansion_factor``.
+                as ``d_hidden * expansion_factor`` when ``d_dictionary`` is not
+                provided.
+            d_dictionary: Optional explicit dictionary size. This is equivalent
+                to ``d_hidden * expansion_factor`` but is convenient for scripts
+                that specify the expanded feature dimension directly.
             normalize_to_sqrt_d: If enabled, apply the base Dictionary
                 sqrt(d) normalization along the channel dimension before
                 encoding.
@@ -296,10 +301,14 @@ class SpatialPairSAE(Dictionary):
             raise ValueError(f"d_hidden={d_hidden} must be positive")
         if expansion_factor <= 0:
             raise ValueError(f"expansion_factor={expansion_factor} must be positive")
+        if d_dictionary is not None and d_dictionary <= 0:
+            raise ValueError(f"d_dictionary={d_dictionary} must be positive")
 
         self.activation_dim = d_hidden
-        self.expansion_factor = expansion_factor
-        self.dict_size = d_hidden * expansion_factor
+        self.dict_size = (
+            d_dictionary if d_dictionary is not None else d_hidden * expansion_factor
+        )
+        self.expansion_factor = self.dict_size / d_hidden
 
         # Conv2d consumes tensors in [batch, channels, height, width] layout.
         # The encoder maps d_hidden pair channels to d_dictionary sparse

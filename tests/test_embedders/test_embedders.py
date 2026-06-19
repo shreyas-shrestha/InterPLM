@@ -9,6 +9,7 @@ import torch
 import numpy as np
 
 from interplm.embedders import get_embedder, ESM
+from interplm.embedders.openfold_embedder import OpenFoldEmbedder
 from .conftest import create_mock_fasta
 
 
@@ -30,6 +31,28 @@ EMBEDDER_CONFIGS = {
     },
     # Add more embedder configurations here
 }
+
+
+class FakeOpenFoldModel(torch.nn.Module):
+    def forward(self, batch):
+        batch_size, _, seq_len = batch["msa"].shape
+        return {"pair": torch.randn(batch_size, seq_len, seq_len, 16)}
+
+
+def test_openfold_embedder_returns_pair_layout():
+    """Test OpenFoldEmbedder normalizes pair representations to [B, N, N, C]."""
+    embedder = OpenFoldEmbedder(
+        model=FakeOpenFoldModel(),
+        device="cpu",
+        pair_dim=16,
+        load_model=False,
+    )
+    dummy_msa_input = torch.randint(0, 20, (2, 10, 50))
+
+    pair_rep = embedder.embed(dummy_msa_input)
+
+    assert pair_rep.shape == (2, 50, 50, 16)
+    assert get_embedder("openfold", model=FakeOpenFoldModel(), device="cpu", load_model=False)
 
 
 # ============================================================================
