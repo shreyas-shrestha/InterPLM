@@ -11,7 +11,12 @@ import torch
 from interplm.train.trainers.relu import ReLUTrainer, ReLUTrainerConfig
 from interplm.train.trainers.top_k import TopKTrainer, TopKTrainerConfig
 from interplm.train.trainers.batch_top_k import BatchTopKTrainer, BatchTopKTrainerConfig
-from interplm.sae.dictionary import ReLUSAE, TopKSAE, BatchTopKSAE
+from interplm.train.trainers.spatial_pair_trainer import (
+    SpatialPairTrainer,
+    SpatialPairTrainerConfig,
+)
+from interplm.train.configs import _get_trainer_config_class
+from interplm.sae.dictionary import ReLUSAE, TopKSAE, BatchTopKSAE, SpatialPairSAE
 
 
 # ============================================================================
@@ -352,6 +357,71 @@ def test_topk_dead_feature_tracking():
 
     # Features that didn't fire should have incremented
     assert torch.any(after_step > 0), "Some features should not have fired"
+
+
+# ============================================================================
+# SPATIAL PAIR TRAINER SPECIFIC TESTS
+# ============================================================================
+
+def test_spatial_pair_trainer_loss_contract():
+    """Test SpatialPairTrainer handles [B, N, N, d_hidden] pair activations."""
+    config = SpatialPairTrainerConfig(
+        activation_dim=8,
+        expansion_factor=4,
+        lr=0.001,
+        steps=100,
+        warmup_steps=5,
+        decay_start=50,
+        l1_penalty=0.06,
+    )
+    trainer = SpatialPairTrainer(config)
+
+    pair_activations = torch.randn(2, 6, 6, 8).to(trainer.device)
+    loss_result = trainer.loss(pair_activations, step=10, logging=True)
+
+    assert isinstance(trainer.ae, SpatialPairSAE)
+    assert loss_result.x_hat.shape == pair_activations.shape
+    assert loss_result.f.shape == (2, 32, 6, 6)
+    assert loss_result.losses["loss/reconstruction"] >= 0
+    assert loss_result.losses["loss/sparsity"] >= 0
+    assert loss_result.losses["loss/total"] >= loss_result.losses["loss/reconstruction"]
+    assert "performance/mse" in loss_result.losses
+    assert "performance/l0_sparsity" in loss_result.losses
+    assert "performance/variance_explained" in loss_result.losses
+
+
+def test_spatial_pair_trainer_update_runs():
+    """Test SpatialPairTrainer can complete one optimization step."""
+    config = SpatialPairTrainerConfig(
+        activation_dim=4,
+        expansion_factor=2,
+        lr=0.001,
+        steps=20,
+        warmup_steps=2,
+        decay_start=10,
+        l1_penalty=0.06,
+    )
+    trainer = SpatialPairTrainer(config)
+
+    pair_activations = torch.randn(2, 5, 5, 4)
+    loss = trainer.update(step=0, x=pair_activations)
+
+    assert isinstance(loss, float)
+    assert loss >= 0
+
+
+def test_spatial_pair_config_detection_uses_trainer_name():
+    """Test YAML reload can distinguish SpatialPairTrainer from ReLU despite L1."""
+    trainer_config_class = _get_trainer_config_class(
+        {
+            "trainer_name": "SpatialPairTrainer",
+            "activation_dim": 8,
+            "expansion_factor": 4,
+            "l1_penalty": 0.06,
+        }
+    )
+
+    assert trainer_config_class is SpatialPairTrainerConfig
 
 
 # ============================================================================

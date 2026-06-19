@@ -6,4 +6,8 @@ from interplm.train.trainers.relu import (
     ReLUTrainer,
     ReLUTrainerConfig,
 )
+from interplm.train.trainers.spatial_pair_trainer import (
+    SpatialPairTrainer,
+    SpatialPairTrainerConfig,
+)
 from interplm.train.trainers.top_k import TopKTrainer, TopKTrainerConfig

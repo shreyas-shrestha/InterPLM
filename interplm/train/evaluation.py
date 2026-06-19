@@ -89,6 +89,13 @@ class EvaluationManager:
         Returns:
             dict: Dictionary of sparsity metrics
         """
+        if features.ndim == 4:
+            # SpatialPairSAE activations are channel-first:
+            # [batch, d_dictionary, N, N]. Count active dictionary features
+            # at each residue-pair position, then average over batch and grid.
+            n_nonzero_per_example = (features != 0).float().sum(dim=1)
+            return n_nonzero_per_example.mean().item()
+
         n_nonzero_per_example = (features != 0).float().sum(dim=-1)
         return n_nonzero_per_example.mean().item()
 

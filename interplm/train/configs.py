@@ -10,6 +10,7 @@ from interplm.train.data_loader import DataloaderConfig
 from interplm.train.evaluation import EvaluationConfig
 from interplm.train.trainers.base_trainer import SAETrainerConfig
 from interplm.train.trainers.relu import ReLUTrainerConfig  
+from interplm.train.trainers.spatial_pair_trainer import SpatialPairTrainerConfig
 from interplm.train.trainers.top_k import TopKTrainerConfig
 from interplm.train.trainers.batch_top_k import BatchTopKTrainerConfig
 from interplm.train.trainers.jump_relu import JumpReLUTrainerConfig
@@ -18,6 +19,10 @@ import torch
 
 def _get_trainer_config_class(trainer_data: dict) -> type:
     """Determine the appropriate trainer config class based on the data"""
+    trainer_name = trainer_data.get('trainer_name')
+    if trainer_name == 'SpatialPairTrainer':
+        return SpatialPairTrainerConfig
+
     # Check for unique fields that identify each trainer type
     if 'l1_penalty' in trainer_data:
         return ReLUTrainerConfig
