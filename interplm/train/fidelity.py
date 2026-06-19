@@ -13,10 +13,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import yaml
-from esm import pretrained
-from nnsight import NNsight
 from tqdm import tqdm
-from transformers import EsmForMaskedLM
 
 # from interplm.esm.embed import shuffle_individual_parameters  # Not available in public repo
 from interplm.sae.intervention import get_esm_output_with_intervention
@@ -89,6 +86,10 @@ class ESMFidelityFunction(EvaluationManager):
 
         print("Prepping loss fidelity_fn")
         self.device = get_device()
+
+        from esm import pretrained
+        from nnsight import NNsight
+        from transformers import EsmForMaskedLM
 
         # Extract config values
         self.model_name = eval_config.model_name

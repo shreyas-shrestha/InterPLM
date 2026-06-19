@@ -26,9 +26,12 @@ def main() -> int:
     INTERPLM_DATA = Path(os.environ.get("INTERPLM_DATA", "data"))
     LAYER = os.environ.get("LAYER", "-1")
 
-    embeddings_dir = INTERPLM_DATA / "training_embeddings" / "openfold_baseline" / f"layer_{LAYER}"
-    eval_embeddings_dir = INTERPLM_DATA / "eval_embeddings" / "openfold_baseline" / f"layer_{LAYER}"
-    save_dir = Path("models") / "openfold_spatial_pair_sae" / f"layer_{LAYER}"
+    embeddings_subdir = os.environ.get("EMBEDDINGS_SUBDIR", "openfold_baseline")
+    save_subdir = os.environ.get("SAVE_SUBDIR", embeddings_subdir)
+
+    embeddings_dir = INTERPLM_DATA / "training_embeddings" / embeddings_subdir / f"layer_{LAYER}"
+    eval_embeddings_dir = INTERPLM_DATA / "eval_embeddings" / embeddings_subdir / f"layer_{LAYER}"
+    save_dir = Path("models") / save_subdir / f"layer_{LAYER}"
 
     batch_size = int(os.environ.get("PAIR_BATCH_SIZE", "4"))
     steps = int(os.environ.get("TRAIN_STEPS", "50000"))

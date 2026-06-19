@@ -338,6 +338,11 @@ class SAETrainingRun:
                 if self.wandb_manager.use_wandb:
                     self.wandb_manager.log_metrics(final_metrics, self.training_state["current_step"])
                     print(f"Logged final per-dimension MSE stats - Mean: {final_metrics['final/per_dim_mse_mean']:.6f}")
+                else:
+                    print(
+                        f"Final per-dimension MSE - Mean: {final_metrics['final/per_dim_mse_mean']:.6f}, "
+                        f"Std: {final_metrics['final/per_dim_mse_std']:.6f}"
+                    )
 
             except Exception as e:
                 print(f"Failed to calculate per-dimension MSE: {e}")
@@ -354,17 +359,21 @@ class SAETrainingRun:
 
     def _run_final_evaluation(self):
         """Run comprehensive evaluation at the end of training and save results."""
-        from interplm.train.fidelity import ESMFidelityConfig
-        import yaml
+        config = self.evaluation_manager.config
 
-        # Only run if we have ESMFidelityConfig (which has model_name and layer info)
-        if not isinstance(self.evaluation_manager.config, ESMFidelityConfig):
+        if config.eval_seq_path is None:
+            print("\nSkipping final comprehensive evaluation (no eval_seq_path provided)")
+            return
+
+        if type(config).__name__ != "ESMFidelityConfig":
             print("\nSkipping final comprehensive evaluation (not using ESMFidelityConfig)")
             print("To enable, use ESMFidelityConfig with eval_seq_path parameter")
             return
 
-        if self.evaluation_manager.config.eval_seq_path is None:
-            print("\nSkipping final comprehensive evaluation (no eval_seq_path provided)")
+        from interplm.train.fidelity import ESMFidelityConfig
+        import yaml
+
+        if not isinstance(config, ESMFidelityConfig):
             return
 
         print("\n" + "="*70)

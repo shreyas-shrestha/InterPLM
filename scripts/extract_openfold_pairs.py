@@ -1,8 +1,6 @@
 #!/usr/bin/env python
 """Extract OpenFold pair representations from FASTA shards for SpatialPairSAE training."""
 
-from __future__ import annotations
-
 from pathlib import Path
 from typing import Optional
 
@@ -11,7 +9,11 @@ from tqdm import tqdm
 
 from interplm.data_processing.pair_embedding_io import save_pair_shard
 from interplm.embedders import get_embedder
-from interplm.embedders.openfold_features import iter_protein_inputs, read_fasta
+from interplm.embedders.openfold_features import (
+    build_predict_batch_from_a3m,
+    iter_protein_inputs,
+    read_fasta,
+)
 
 
 def extract_openfold_pairs_from_fasta(
@@ -52,7 +54,7 @@ def extract_openfold_pairs_from_fasta(
 
     available_ids = {protein_id for protein_id, _ in fasta_records}
 
-    for protein_id, _sequence, model_input in tqdm(
+    for protein_id, sequence, model_input in tqdm(
         iter_protein_inputs(
             fasta_path,
             msa_dir=msa_dir,
@@ -65,7 +67,16 @@ def extract_openfold_pairs_from_fasta(
         if protein_id not in available_ids:
             continue
         try:
-            pair = embedder.embed(model_input)
+            if isinstance(model_input, tuple) and model_input[0] == "a3m":
+                batch = build_predict_batch_from_a3m(
+                    model_input[1],
+                    model_name=model_name,
+                    device=embedder.device,
+                    max_msa_depth=max_msa_depth,
+                )
+            else:
+                batch = model_input
+            pair = embedder.embed(batch)
             if pair.shape[0] != 1:
                 pair = pair[:1]
             pair_reprs.append(pair[0].detach().cpu())
@@ -101,16 +112,22 @@ def extract_openfold_pairs_from_fasta(
 
 
 def main(
-    fasta_dir: Path,
-    output_dir: Path,
-    msa_dir: Optional[Path] = None,
-    feature_dir: Optional[Path] = None,
+    fasta_dir: str,
+    output_dir: str,
+    msa_dir: Optional[str] = None,
+    feature_dir: Optional[str] = None,
     model_name: str = "model_1",
-    checkpoint_path: Optional[Path] = None,
+    checkpoint_path: Optional[str] = None,
     layer: int = -1,
     max_msa_depth: Optional[int] = None,
+    max_proteins: Optional[int] = None,
     shard_index: Optional[int] = None,
 ):
+    fasta_dir = Path(fasta_dir)
+    output_dir = Path(output_dir)
+    msa_dir = Path(msa_dir) if msa_dir is not None else None
+    feature_dir = Path(feature_dir) if feature_dir is not None else None
+    checkpoint_path = Path(checkpoint_path) if checkpoint_path is not None else None
     """
     Extract OpenFold pair representations from FASTA shard files.
 
@@ -123,6 +140,7 @@ def main(
         checkpoint_path: Optional OpenFold checkpoint path.
         layer: Layer label for output directory naming (default: -1 for final pair rep).
         max_msa_depth: Optional cap on MSA depth per protein.
+        max_proteins: Optional cap on proteins per shard (useful for pilots).
         shard_index: Optional 0-based shard index to process a single FASTA file.
     """
     fasta_files = sorted(fasta_dir.glob("*.fasta"))
@@ -152,6 +170,7 @@ def main(
             checkpoint_path=checkpoint_path,
             layer=layer,
             max_msa_depth=max_msa_depth,
+            max_proteins=max_proteins,
         )
         for key in totals:
             totals[key] += counts[key]

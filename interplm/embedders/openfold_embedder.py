@@ -76,7 +76,7 @@ class OpenFoldEmbedder(BaseEmbedder):
             self.model = AlphaFold(config)
 
         if self.checkpoint_path is not None:
-            state = torch.load(self.checkpoint_path, map_location="cpu")
+            state = torch.load(self.checkpoint_path, map_location="cpu", weights_only=False)
             state_dict = state.get("state_dict", state)
             self.model.load_state_dict(state_dict, strict=False)
 

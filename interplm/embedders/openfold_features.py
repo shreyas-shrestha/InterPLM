@@ -171,13 +171,99 @@ def load_feature_batch(path: Path, map_location: str | torch.device = "cpu") -> 
     raise TypeError(f"Expected feature dict at {path}, got {type(data)}")
 
 
+def build_predict_batch_from_sequence(
+    sequence: str,
+    *,
+    model_name: str = "model_3",
+    device: str | torch.device = "cpu",
+) -> dict:
+    """Build a processed OpenFold predict batch from a raw amino-acid sequence."""
+    from openfold.config import model_config
+    from openfold.data import feature_pipeline
+    from openfold.data.data_pipeline import make_dummy_msa_feats, make_sequence_features
+    from openfold.data.templates import empty_template_feats
+
+    config = model_config(model_name, train=False)
+    num_res = len(sequence)
+    raw_features = {
+        **make_sequence_features(sequence=sequence, description="query", num_res=num_res),
+        **make_dummy_msa_feats(sequence),
+        **empty_template_feats(num_res),
+    }
+    processed = feature_pipeline.FeaturePipeline(config.data).process_features(
+        raw_features,
+        mode="predict",
+        is_multimer=False,
+    )
+    return {
+        key: value.to(device) if torch.is_tensor(value) else value
+        for key, value in processed.items()
+    }
+
+
+def build_predict_batch_from_a3m(
+    a3m_path: Path,
+    *,
+    model_name: str = "model_3",
+    device: str | torch.device = "cpu",
+    max_msa_depth: int | None = None,
+) -> dict:
+    """Build a processed OpenFold predict batch from an A3M alignment file."""
+    from openfold.config import model_config
+    from openfold.data import feature_pipeline
+    from openfold.data import parsers
+    from openfold.data.data_pipeline import make_msa_features, make_sequence_features
+    from openfold.data.templates import empty_template_feats
+
+    sequences = read_a3m_sequences(a3m_path)
+    if not sequences:
+        raise ValueError(f"No sequences found in {a3m_path}")
+    if max_msa_depth is not None:
+        sequences = sequences[:max_msa_depth]
+
+    query = sequences[0]
+    aligned_length = len(query)
+    keep_columns = [idx for idx, aa in enumerate(query) if aa != "-"]
+    ungapped_sequences = [
+        "".join(seq[idx] for idx in keep_columns) for seq in sequences
+    ]
+    deletion_matrix = []
+    for seq in sequences:
+        row = []
+        for idx in keep_columns:
+            row.append(0 if seq[idx] != "-" else 1)
+        deletion_matrix.append(row)
+
+    msa_obj = parsers.Msa(
+        sequences=ungapped_sequences,
+        deletion_matrix=deletion_matrix,
+        descriptions=[f"seq_{i}" for i in range(len(ungapped_sequences))],
+    )
+    sequence = ungapped_sequences[0]
+    num_res = len(sequence)
+    raw_features = {
+        **make_sequence_features(sequence=sequence, description="query", num_res=num_res),
+        **make_msa_features([msa_obj]),
+        **empty_template_feats(num_res),
+    }
+    config = model_config(model_name, train=False)
+    processed = feature_pipeline.FeaturePipeline(config.data).process_features(
+        raw_features,
+        mode="predict",
+        is_multimer=False,
+    )
+    return {
+        key: value.to(device) if torch.is_tensor(value) else value
+        for key, value in processed.items()
+    }
+
 def iter_protein_inputs(
     fasta_path: Path,
     *,
     msa_dir: Path | None = None,
     feature_dir: Path | None = None,
     max_msa_depth: int | None = None,
-) -> Iterator[tuple[str, str, dict | torch.Tensor]]:
+) -> Iterator[tuple[str, str, dict | tuple[str, Path]]]:
     """
     Yield ``(protein_id, sequence, msa_or_feature_batch)`` for each FASTA record.
 
@@ -202,8 +288,9 @@ def iter_protein_inputs(
             continue
 
         if msa_path.suffix == ".a3m":
-            yield protein_id, sequence, a3m_to_msa_tensor(msa_path, max_msa_depth=max_msa_depth)
+            yield protein_id, sequence, ("a3m", msa_path)
         else:
             raise ValueError(
                 f"Unsupported MSA format for {msa_path}. Use .a3m or precomputed feature batches."
             )
+
