@@ -14,6 +14,7 @@ import numpy as np
 from interplm.sae.dictionary import (
     ReLUSAE,
     ReLUSAE_Tied,
+    SpatialPairSAE,
     TopKSAE,
     BatchTopKSAE,
     JumpReLUSAE,
@@ -102,6 +103,57 @@ def test_jumprelu_threshold_is_learnable():
     # Should have requires_grad=True
     assert sae.threshold.requires_grad, \
         "JumpReLUSAE: threshold should be learnable (requires_grad=True)"
+
+
+# ============================================================================
+# SPATIAL PAIR SAE ARCHITECTURE-SPECIFIC BEHAVIOR
+# ============================================================================
+
+def test_spatial_pair_sae_shapes_and_biases():
+    """Test SpatialPairSAE preserves pair-grid shape and uses custom biases."""
+    batch_size = 2
+    seq_len = 7
+    d_hidden = 8
+    expansion_factor = 4
+
+    sae = SpatialPairSAE(d_hidden=d_hidden, expansion_factor=expansion_factor)
+    pair_repr = torch.randn(batch_size, seq_len, seq_len, d_hidden)
+
+    reconstruction, features = sae(pair_repr)
+
+    assert sae.dict_size == d_hidden * expansion_factor
+    assert sae.activation_dim == d_hidden
+    assert reconstruction.shape == pair_repr.shape
+    assert features.shape == (
+        batch_size,
+        d_hidden * expansion_factor,
+        seq_len,
+        seq_len,
+    )
+    assert sae.encoder.bias is None
+    assert sae.decoder.bias is None
+    assert sae.encoder_bias.shape == (d_hidden * expansion_factor,)
+    assert sae.decoder_bias.shape == (d_hidden,)
+
+
+def test_spatial_pair_sae_forward_matches_manual_formula():
+    """Test SpatialPairSAE implements ReLU(W_e(x - b_d) + b_e) and adds b_d back."""
+    sae = SpatialPairSAE(d_hidden=4, expansion_factor=2)
+    pair_repr = torch.randn(3, 5, 5, 4)
+
+    reconstruction, features = sae(pair_repr)
+
+    x_channels_first = pair_repr.permute(0, 3, 1, 2)
+    shifted_x = x_channels_first - sae.decoder_bias.view(1, -1, 1, 1)
+    expected_features = torch.relu(
+        sae.encoder(shifted_x) + sae.encoder_bias.view(1, -1, 1, 1)
+    )
+    expected_reconstruction = (
+        sae.decoder(expected_features) + sae.decoder_bias.view(1, -1, 1, 1)
+    ).permute(0, 2, 3, 1)
+
+    assert torch.allclose(features, expected_features, atol=1e-6)
+    assert torch.allclose(reconstruction, expected_reconstruction, atol=1e-6)
 
 
 # ============================================================================

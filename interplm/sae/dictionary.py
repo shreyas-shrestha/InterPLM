@@ -257,6 +257,209 @@ class ReLUSAE(Dictionary):
         return autoencoder
 
 
+class SpatialPairSAE(Dictionary):
+    """
+    Convolutional SAE for OpenFold Evoformer pair representations.
+
+    Unlike the standard InterPLM SAEs, which operate on 1D activation vectors,
+    this model treats the pair representation as a 2D N x N interaction grid
+    with ``d_hidden`` channels. The encoder and decoder are 2D convolutions, so
+    each sparse feature can depend on a local spatial neighborhood in the pair
+    matrix.
+
+    The learned reconstruction has the standard dictionary-learning form:
+
+        x_hat = b_dec + decoder(f_x)
+        f_x = ReLU(encoder(x - b_dec) + b_enc)
+
+    where ``b_dec`` is the per-channel reconstruction baseline and ``b_enc`` is
+    a per-feature encoder bias.
+    """
+
+    def __init__(
+        self,
+        d_hidden: int,
+        expansion_factor: int = 4,
+        normalize_to_sqrt_d: bool = False,
+    ) -> None:
+        """
+        Args:
+            d_hidden: Number of channels in the pair representation.
+            expansion_factor: Multiplier used to compute the dictionary size
+                as ``d_hidden * expansion_factor``.
+            normalize_to_sqrt_d: If enabled, apply the base Dictionary
+                sqrt(d) normalization along the channel dimension before
+                encoding.
+        """
+        super().__init__(normalize_to_sqrt_d)
+        if d_hidden <= 0:
+            raise ValueError(f"d_hidden={d_hidden} must be positive")
+        if expansion_factor <= 0:
+            raise ValueError(f"expansion_factor={expansion_factor} must be positive")
+
+        self.activation_dim = d_hidden
+        self.expansion_factor = expansion_factor
+        self.dict_size = d_hidden * expansion_factor
+
+        # Conv2d consumes tensors in [batch, channels, height, width] layout.
+        # The encoder maps d_hidden pair channels to d_dictionary sparse
+        # features while preserving the N x N pair grid via padding="same".
+        self.encoder = nn.Conv2d(
+            in_channels=d_hidden,
+            out_channels=self.dict_size,
+            kernel_size=3,
+            padding="same",
+            bias=False,
+        )
+
+        # The decoder maps sparse feature maps back to d_hidden pair channels.
+        # It has no bias because decoder_bias is added explicitly below.
+        self.decoder = nn.Conv2d(
+            in_channels=self.dict_size,
+            out_channels=d_hidden,
+            kernel_size=3,
+            padding="same",
+            bias=False,
+        )
+
+        # Decoder bias b_dec has one value per pair-representation channel and
+        # is broadcast over every position in the N x N grid.
+        self.decoder_bias = nn.Parameter(t.zeros(d_hidden))
+
+        # Encoder bias b_enc has one value per dictionary feature and is
+        # broadcast over the N x N grid before the ReLU nonlinearity.
+        self.encoder_bias = nn.Parameter(t.zeros(self.dict_size))
+
+        self.register_buffer("activation_rescale_factor", t.ones(self.dict_size))
+        self._make_contiguous()
+
+    def _validate_pair_input(self, x: t.Tensor) -> None:
+        if x.ndim != 4:
+            raise ValueError(
+                f"SpatialPairSAE expected input shape [batch, N, N, d_hidden], got {tuple(x.shape)}"
+            )
+        if x.shape[1] != x.shape[2]:
+            raise ValueError(
+                f"SpatialPairSAE expected a square pair grid, got N={x.shape[1]} and M={x.shape[2]}"
+            )
+        if x.shape[-1] != self.activation_dim:
+            raise ValueError(
+                f"SpatialPairSAE expected d_hidden={self.activation_dim}, got {x.shape[-1]}"
+            )
+
+    def encode(self, x: t.Tensor, normalize_features: bool = False) -> t.Tensor:
+        """
+        Encode pair representations into sparse convolutional feature maps.
+
+        Args:
+            x: Pair representations with shape ``[batch, N, N, d_hidden]``.
+            normalize_features: If True, divide each feature map by its
+                activation rescale factor.
+
+        Returns:
+            Sparse activations ``f_x`` with shape
+            ``[batch, d_dictionary, N, N]``.
+        """
+        self._validate_pair_input(x)
+
+        # [B, N, N, d_hidden] -> [B, d_hidden, N, N] for Conv2d.
+        x_channels_first = x.permute(0, 3, 1, 2)
+
+        # Broadcast b_dec from [d_hidden] to [1, d_hidden, 1, 1] so every
+        # spatial pair position is shifted by the same channel baseline.
+        shifted_x = x_channels_first - self.decoder_bias.view(1, -1, 1, 1)
+
+        # Encoder convolution preserves the pair grid:
+        # [B, d_hidden, N, N] -> [B, d_dictionary, N, N].
+        encoded = self.encoder(shifted_x)
+
+        # Broadcast b_enc from [d_dictionary] to [1, d_dictionary, 1, 1],
+        # then apply ReLU to produce non-negative sparse feature activations.
+        f_x = nn.functional.relu(encoded + self.encoder_bias.view(1, -1, 1, 1))
+
+        if normalize_features:
+            f_x = f_x / self.activation_rescale_factor.view(1, -1, 1, 1)
+
+        return f_x
+
+    def decode(self, f: t.Tensor) -> t.Tensor:
+        """
+        Decode sparse feature maps back to pair-representation layout.
+
+        Args:
+            f: Sparse activations with shape ``[batch, d_dictionary, N, N]``.
+
+        Returns:
+            Reconstructed pair representations with shape
+            ``[batch, N, N, d_hidden]``.
+        """
+        if f.ndim != 4:
+            raise ValueError(
+                f"SpatialPairSAE expected feature shape [batch, d_dictionary, N, N], got {tuple(f.shape)}"
+            )
+        if f.shape[1] != self.dict_size:
+            raise ValueError(
+                f"SpatialPairSAE expected d_dictionary={self.dict_size}, got {f.shape[1]}"
+            )
+
+        # Decoder convolution preserves the pair grid:
+        # [B, d_dictionary, N, N] -> [B, d_hidden, N, N].
+        decoded = self.decoder(f)
+
+        # Add b_dec back as the reconstruction baseline in channel-first form.
+        reconstructed_channels_first = decoded + self.decoder_bias.view(1, -1, 1, 1)
+
+        # [B, d_hidden, N, N] -> [B, N, N, d_hidden] to match the input API.
+        return reconstructed_channels_first.permute(0, 2, 3, 1)
+
+    @t.no_grad()
+    def encode_feat_subset(
+        self,
+        x: t.Tensor,
+        feat_list: list[int],
+        normalize_features: bool = False,
+    ) -> t.Tensor:
+        """
+        Encode only a subset of convolutional dictionary features.
+
+        Returns activations in shape ``[batch, len(feat_list), N, N]``.
+        """
+        features = self.encode(x, normalize_features=normalize_features)
+        return features[:, feat_list, :, :]
+
+    def forward(self, x: t.Tensor) -> tuple[t.Tensor, t.Tensor]:
+        """
+        Run the full spatial pair SAE.
+
+        Shape flow:
+            1. Input ``x`` arrives as ``[B, N, N, d_hidden]``.
+            2. ``encode`` permutes it to ``[B, d_hidden, N, N]``, subtracts
+               ``decoder_bias``, applies the encoder convolution, adds
+               ``encoder_bias``, and returns sparse activations
+               ``f_x`` as ``[B, d_dictionary, N, N]``.
+            3. ``decode`` maps ``f_x`` back through the decoder convolution,
+               adds ``decoder_bias``, and permutes the reconstruction to
+               ``[B, N, N, d_hidden]``.
+
+        Returns:
+            A tuple ``(reconstructed_tensor, f_x)``.
+        """
+        # Normalize along the final channel dimension while the tensor is still
+        # in pair-layout form [B, N, N, d_hidden].
+        x, original_norms = self._normalize_input_and_get_norms(x)
+
+        f_x = self.encode(x)
+        reconstructed_tensor = self.decode(f_x)
+
+        # Restore the original per-position channel scale if sqrt(d)
+        # normalization was enabled.
+        reconstructed_tensor = self._unnormalize_output(
+            reconstructed_tensor, original_norms
+        )
+
+        return reconstructed_tensor, f_x
+
+
 class IdentityDict(Dictionary, nn.Module):
     """
     An identity dictionary, i.e. the identity function. This is useful for treating neurons as features.
